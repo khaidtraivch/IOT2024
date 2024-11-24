@@ -77,6 +77,57 @@ app.get('/api/swipe_records', (req, res) => {
     });
 });
 
+app.post('/api/swipe', async (req, res) => {
+    const { cardUID, swipeTime, vehicleType } = req.body;
+
+    if (cardUID && swipeTime) {
+        db.get(`SELECT * FROM swipe_records WHERE cardUID = ? ORDER BY id DESC LIMIT 1`, [cardUID], async (err, row) => {
+            if (err) {
+                return res.status(500).json({ message: 'Database error', error: err });
+            }
+
+            if (row && !row.checkOutTime) {
+                // Nếu có bản ghi check-in chưa có check-out
+                db.run(`UPDATE swipe_records SET checkOutTime = ? WHERE id = ?`, [swipeTime, row.id], (err) => {
+                    if (err) {
+                        return res.status(500).json({ message: 'Database error', error: err });
+                    }
+                });
+
+                // Gửi tín hiệu mở cổng
+                try {
+                    const response = await axios.get(`http://${ESP32_IP}/open-gate`);
+                    console.log('Phản hồi từ ESP32 khi mở cổng:', response.data);
+                    res.status(200).json({ message: 'Check-out thành công và mở cổng!', action: "OUT" });
+                } catch (error) {
+                    console.error('Lỗi khi gửi lệnh mở cổng:', error.message);
+                    res.status(500).json({ message: 'Check-out thành công nhưng không thể mở cổng.' });
+                }
+            } else {
+                // Nếu không có bản ghi check-in, tạo bản ghi mới với check-in
+                db.run(`INSERT INTO swipe_records (cardUID, checkInTime, vehicleType) VALUES (?, ?, ?)`, [cardUID, swipeTime, vehicleType], async (err) => {
+                    if (err) {
+                        return res.status(500).json({ message: 'Database error', error: err });
+                    }
+                });
+
+                // Gửi tín hiệu mở cổng
+                try {
+                    const response = await axios.get(`http://${ESP32_IP}/open-gate`);
+                    console.log('Phản hồi từ ESP32 khi mở cổng:', response.data);
+                    res.status(200).json({ message: 'Check-in thành công và mở cổng!', action: "IN" });
+                } catch (error) {
+                    console.error('Lỗi khi gửi lệnh mở cổng:', error.message);
+                    res.status(500).json({ message: 'Check-in thành công nhưng không thể mở cổng.' });
+                }
+            }
+        });
+    } else {
+        res.status(400).json({ message: 'Sai định dạng data' });
+    }
+});
+
+
 let irSensorStates = { slot1: 'Trống', slot2: 'Trống' };
 app.get('/ir_sensor', (req, res) => {
     const sensorId = req.query.sensor;
